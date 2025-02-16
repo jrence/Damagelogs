@@ -1,4 +1,7 @@
-local parts = {
+-----------------------------------------
+-- Bone IDs mapped to their names
+-----------------------------------------
+local boneIds = {
     ['eyebrow'] = 1356,
     ['left toe'] = 2108,
     ['right elbow'] = 2992,
@@ -50,35 +53,21 @@ local parts = {
     ['face'] = 65068
 }
 
-local lastBone = nil
-Citizen.CreateThread(function()
-    while true do
-        local idle = 2000
-        local foundLastDamagedBone, lastDamagedBone = GetPedLastDamageBone(PlayerPedId())
-        if foundLastDamagedBone and lastDamagedBone ~= lastBone then
-            local damagedBone = GetKeyOfValue(parts, lastDamagedBone)
-            if damagedBone then
-                local remainingHP = GetEntityHealth(PlayerPedId()) - 100
-                local remainingAR = GetPedArmour(PlayerPedId())
-                local message = string.format("%s [Damage Area] %s [Remaining HP] %d [Remaining Armor] %d", GetPlayerName(PlayerId()), damagedBone, remainingHP, remainingAR)
-                TriggerServerEvent('asd', message)
-                lastBone = lastDamagedBone
-                idle = 0
-            end
-        end
-        Citizen.Wait(idle)
-    end
-end)
+-----------------------------------------
+-- Utility Functions
+-----------------------------------------
 
-function GetKeyOfValue(table, searchedFor)
-    for key, value in pairs(table) do
-        if searchedFor == value then
-            return key
+-- Returns the bone name by its ID from the boneIds table.
+local function getBoneNameById(boneId)
+    for name, id in pairs(boneIds) do
+        if id == boneId then
+            return name
         end
     end
     return nil
 end
 
+-- Draws text on screen.
 local function drawTxt(x, y, scale, text, r, g, b, font, centered)
     SetTextFont(font or 4)
     SetTextProportional(0)
@@ -96,34 +85,85 @@ local function drawTxt(x, y, scale, text, r, g, b, font, centered)
     DrawText(x, y)
 end
 
-local damageLog = {}
-local maxDamageLogs = 5
+-----------------------------------------
+-- Damage Log Management
+-----------------------------------------
+local damageLogs = {}
+local MAX_DAMAGE_LOGS = 5
 
-RegisterNetEvent("damagelogs")
-AddEventHandler("damagelogs", function(damageAmount, senderId, isDead)
-    local damageText = isDead and string.format("DEAD(%d)", math.min(damageAmount, 200)) or math.min(damageAmount, 200)
-    table.insert(damageLog, {timestamp = GetGameTimer() + 500, totalDamage = damageText})
-    if #damageLog > maxDamageLogs then
-        table.remove(damageLog, 1)
+-- Removes expired damage logs (logs older than their timestamp).
+local function cleanupDamageLogs()
+    while #damageLogs > 0 and GetGameTimer() >= damageLogs[1].timestamp do
+        table.remove(damageLogs, 1)
     end
-    TriggerServerEvent('totaldamage', damageText)
-end)
+end
 
+-----------------------------------------
+-- Threads
+-----------------------------------------
+
+-- Thread: Check for the last damaged bone and notify the server.
+local lastDamagedBoneId = nil
 Citizen.CreateThread(function()
     while true do
-        local idle = 2000
-        if #damageLog > 0 then
-            local posY = 0.50
-            for _, v in ipairs(damageLog) do
-                if GetGameTimer() < v.timestamp then
-                    drawTxt(0.53, posY, 0.6, tostring(v.totalDamage), 252, 78, 66, 2, 1)
-                    posY = posY - 0.025
-                    idle = 0
-                else
-                    table.remove(damageLog, 1)
-                end
+        local waitTime = 2000
+        local playerPed = PlayerPedId()
+        local foundBone, currentBoneId = GetPedLastDamageBone(playerPed)
+        
+        if foundBone and currentBoneId ~= lastDamagedBoneId then
+            local boneName = getBoneNameById(currentBoneId)
+            if boneName then
+                local remainingHP = GetEntityHealth(playerPed) - 100
+                local remainingArmor = GetPedArmour(playerPed)
+                local message = string.format(
+                    "%s [Damage Area] %s [Remaining HP] %d [Remaining Armor] %d",
+                    GetPlayerName(PlayerId()),
+                    boneName,
+                    remainingHP,
+                    remainingArmor
+                )
+                TriggerServerEvent('asd', message)
+                lastDamagedBoneId = currentBoneId
+                waitTime = 0
             end
         end
-        Citizen.Wait(idle)
+        
+        Citizen.Wait(waitTime)
     end
+end)
+
+-- Thread: Display damage logs on screen.
+Citizen.CreateThread(function()
+    while true do
+        local waitTime = 2000
+        cleanupDamageLogs()
+        
+        if #damageLogs > 0 then
+            local posY = 0.50
+            for _, log in ipairs(damageLogs) do
+                drawTxt(0.53, posY, 0.6, tostring(log.totalDamage), 252, 78, 66, 2, true)
+                posY = posY - 0.025
+            end
+            waitTime = 0
+        end
+        
+        Citizen.Wait(waitTime)
+    end
+end)
+
+-----------------------------------------
+-- Event Handlers
+-----------------------------------------
+
+-- Handles damage log events coming from the server.
+RegisterNetEvent("damagelogs")
+AddEventHandler("damagelogs", function(damageAmount, senderId, isDead)
+    local displayedDamage = isDead and string.format("DEAD(%d)", math.min(damageAmount, 200)) or tostring(math.min(damageAmount, 200))
+    table.insert(damageLogs, { timestamp = GetGameTimer() + 500, totalDamage = displayedDamage })
+    
+    if #damageLogs > MAX_DAMAGE_LOGS then
+        table.remove(damageLogs, 1)
+    end
+
+    TriggerServerEvent('totaldamage', displayedDamage)
 end)
